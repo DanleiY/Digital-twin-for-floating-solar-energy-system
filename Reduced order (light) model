@@ -1,0 +1,42 @@
+data = readtable('dataset_reducido_Pactual_W.csv');
+
+input_vars = {'Light_Angle','Frequency_Hz','Amplitude_m','Irradiance_Mean'};
+output_var = 'Pactual_W';
+
+X = data{:, input_vars};
+Y = data{:, output_var};
+
+valid_rows = ~any(isnan([X Y]), 2);
+X = X(valid_rows, :);
+Y = Y(valid_rows);
+
+[Xn, ps] = mapminmax(X', 0, 1);
+Xn = Xn';
+
+cv = cvpartition(size(Xn,1), 'HoldOut', 0.2);
+idxTrain = training(cv);
+idxTest = test(cv);
+
+Xtrain = Xn(idxTrain,:);
+Ytrain = Y(idxTrain);
+Xtest = Xn(idxTest,:);
+Ytest = Y(idxTest);
+
+net = fitnet([10, 5], 'trainscg');
+net.trainParam.showWindow = true;
+net.divideFcn = 'divideind';
+net.divideParam.trainInd = find(idxTrain);
+net.divideParam.valInd = [];
+net.divideParam.testInd = find(idxTest);
+
+[net, tr] = train(net, Xn', Y');
+
+Ypred = net(Xtest');
+
+rmse = sqrt(mean((Ytest - Ypred').^2));
+r2 = 1 - sum((Ytest - Ypred').^2) / sum((Ytest - mean(Ytest)).^2);
+mape = mean(abs((Ytest - Ypred') ./ max(eps, abs(Ytest)))) * 100;
+
+fprintf('RMSE = %.4f | R² = %.4f | MAPE = %.2f%%\n', rmse, r2, mape);
+
+save('modelo_reducido_Pactual_W.mat','net','ps','input_vars','output_var');
