@@ -1,0 +1,103 @@
+folder = '%% <- change the route
+
+files = dir(fullfile(folder, 'SecondFinal_NewCase_*.xlsx'));
+modelos = {
+    'modelo_Heave_cm.mat', 'Heave_cm', 'maxabs';
+    'modelo_Surge_cm.mat', 'Surge_cm', 'maxabs';
+    'modelo_Angle2_L_logmat', 'Pitch', 'maxabs';
+    'modelo_Force1_N.mat', 'Force1_N', 'mean';
+    'modelo_Force2_N.mat', 'Force2_N', 'mean';
+    'modelo_Pactual_W.mat', 'Pactual_W', 'mean';
+};
+
+datos = struct();
+for i = 1:size(modelos,1)
+    nombre = modelos{i,2};
+    datos.(nombre).X = [];
+    datos.(nombre).Y = [];
+end
+
+fprintf('\n Processing files...\n');
+for k = 1:length(files)
+    try
+        filePath = fullfile(folder, files(k).name);
+        fprintf(' --> %s\n', files(k).name);
+        T = readtable(filePath, 'VariableNamingRule', 'preserve');
+
+        rename_map = containers.Map( ...
+            {'Pactual_W','Light_Angle','_Light_Angle_(°)', ...
+            'Temp0fMiddleOfPyranLake__C_', ...
+            'Time_s_','s_ir1_Force1_N_','s_ir1_Force2_N_', ...
+            'Left_Solar_Irradiance__W_m2_', ...
+            'Middle_Solar_Irradiance__W_m2_', ...
+            'Right_Solar_Irradiance__W_m2_'}, ...
+            {'Pactual_W','Light_Angle','Light_Angle', ...
+            'Temp0fMiddleOfPyranLake', ...
+            'Time_sec','Force1_N','Force2_N', ...
+            'Left_Solar_Irradiance_W_m2', ...
+            'Middle_Solar_Irradiance_W_m2', ...
+            'Right_Solar_Irradiance_W_m2'});
+
+        for n = 1:numel(T.Properties.VariableNames)
+            v = T.Properties.VariableNames{n};
+            if isKey(rename_map, v)
+                T.Properties.VariableNames{n} = rename_map(v);
+            end
+        end
+
+        angulo = T.Light_Angle(:);
+        frecuencia = T.Frequency_Hz(:);
+        amplitud = T.Amplitude_m(:);
+        irr = mean([T.Left_Solar_Irradiance__W_m2_1(:), ...
+                    T.Middle_Solar_Irradiance__W_m2_1(:), ...
+                    T.Right_Solar_Irradiance__W_m2_1(:)], 2);
+
+        x_red = [angulo, frecuencia, amplitud, irr];
+
+        for j = 1:size(modelos,1)
+            nombre = modelos{j,2};
+            tipo = modelos{j,3};
+            matfile = modelos{j,1};
+            modelo = load(fullfile(folder, matfile));
+            net = modelo.net;
+            ps = modelo.ps;
+            input_vars = modelo.input_vars;
+
+            if ~all(ismember(input_vars, T.Properties.VariableNames))
+                warning('⚠️ More variables are needed in %s for %s. Archivo omitido.', ...
+                        files(k).name, nombre); continue;
+            end
+
+            X_full = T{:,input_vars};
+            Xn_full = mapminmax('apply', X_full', ps);
+            Y_pred = net(Xn_full)';
+
+            if strcmp(tipo, 'mean')
+                y = mean(Y_pred, 2);
+            elseif strcmp(tipo, 'maxabs')
+                y = max(abs(Y_pred), [], 2);
+            else
+                error('Tipo de salida no reconocido: %s', tipo);
+            end
+
+            datos.(nombre).X = [datos.(nombre).X; x_red];
+            datos.(nombre).Y = [datos.(nombre).Y; y];
+        end
+    catch ME
+        fprintf('⚠️ Error in folder %s: %s\n', files(k).name, ME.message);
+    end
+end
+
+campos = fieldnames(datos);
+for i = 1:length(campos)
+    var = campos{i};
+    X = datos.(var).X;
+    Y = datos.(var).Y;
+
+    if isempty(X), continue; end
+    Tfinal = array2table([X, Y], ...
+        'VariableNames', {'Light_Angle','Frequency_Hz','Amplitude_m', 'Irradiance_Mean', var});
+
+    writetable(Tfinal, ['dataset_reducido_' var '.csv']);
+    fprintf('✅ Saved: dataset_reducido_%s.csv (%d muestras)\n', var, size(Tfinal,1));
+end
